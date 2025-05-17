@@ -1,0 +1,21 @@
+{
+    "SiteConfig": [{
+        "Name": "Name of item",
+        "Url": "Url to search",
+        "SearchMode": 0,
+        "Div": [
+            "classname1",
+            "classname2"
+        ],
+        "Id": [
+            [ "this", "is", "one", "id" ],
+            [ "this", "is", "another", "id" ]
+        ],
+        "CheckString": "string to check for",
+        "BearerToken": "bearer token",
+        "WebhookConfig": {
+            "WebhookUrl": "webhook url",
+            "BearerToken": "leave empty if not needed"
+        }
+    }]
+}
