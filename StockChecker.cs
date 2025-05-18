@@ -105,7 +105,7 @@ namespace ShopStockNotifier
             _logger.Log($"Attempting to check url{(_alias != "" ? $" for {_alias} " : "")}: {_url}");
             try
             {
-                string response = await GetHTMLAsync2(_url);
+                string response = await GetHTMLAsync(_url);
 
                 HtmlDocument htmlDoc = new HtmlDocument();
                 htmlDoc.LoadHtml(response);
@@ -220,23 +220,7 @@ namespace ShopStockNotifier
             }
         }
 
-
-        public static async Task<string> GetHTMLAsync(string url)
-        {
-            using HttpClient client = new HttpClient();
-            client.DefaultRequestHeaders.Add("User-Agent", @"Mozilla/5.0 (compatible; Rigor/1.0.0; http://rigor.com)");
-            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, url);
-            var response = await client.SendAsync(request);
-
-            if (response != null && response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadAsStringAsync();
-            }
-            throw new Exception($"Request to {url} failed.");
-        }
-
-
-        public async Task<string> GetHTMLAsync2(string url)
+        public async Task<string> GetHTMLAsync(string url)
         {
             using (var pw = await Playwright.CreateAsync())
             {
