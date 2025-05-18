@@ -24,53 +24,53 @@ namespace ShopStockNotifier
 
     internal class StockChecker
     {
-        private Logger _logger;
-        private string _url { get; set; }
-        private List<string> _div { get; set; }
-        private List<List<string>> _id { get; set; }
-        private string _checker { get; set; }
-        private CheckType _checkType { get; set; }
-        private string _name { get; set; }
-        private int _refresh { get; set; }
-        private int _cooldown { get; set; }
-        private SearchMode _mode { get; set; }
-        private Task _task { get; set; }
-        private CancellationTokenSource _cts { get; set; }
-        private RestSender _webhook { get; set; }
+        private Logger logger;
+        private string url { get; set; }
+        private List<string> divList { get; set; }
+        private List<List<string>> idList { get; set; }
+        private string checker { get; set; }
+        private CheckType checkType { get; set; }
+        private string productName { get; set; }
+        private int refreshTime { get; set; }
+        private int cooldownTime { get; set; }
+        private SearchMode searchMode { get; set; }
+        private Task task { get; set; }
+        private CancellationTokenSource cts { get; set; }
+        private RestSender webhook { get; set; }
 
 
         public StockChecker(SiteConfig config, CheckType type = CheckType.Unavailable)
         {
             // Create logger with a 'unique' hash for this instance
-            _logger = new Logger(RuntimeHelpers.GetHashCode(this));
+            logger = new Logger(RuntimeHelpers.GetHashCode(this));
 
-            this._url = config.Url;
-            this._div = config.Div;
-            this._id = config.Id;
-            this._checker = config.CheckString;
-            this._name = config.Name;
-            this._mode = config.SearchMode;
-            this._refresh = config.RefreshTime;
-            this._cooldown = config.InStockCooldownTime;
+            this.url = config.Url;
+            this.divList = config.Div;
+            this.idList = config.Id;
+            this.checker = config.CheckString;
+            this.productName = config.Name;
+            this.searchMode = config.SearchMode;
+            this.refreshTime = config.RefreshTime;
+            this.cooldownTime = config.InStockCooldownTime;
             // TODO Make this checktype part of config
-            this._checkType = type;            
-            this._cts = new CancellationTokenSource();
-            this._task = CreateTask(_cts.Token);
+            this.checkType = type;            
+            this.cts = new CancellationTokenSource();
+            this.task = CreateTask(cts.Token);
 
             var payloadUrl = string.IsNullOrEmpty(config.WebhookConfig.PayloadUrl) ? config.Url : config.WebhookConfig.PayloadUrl;
             var payloadTitle = string.IsNullOrEmpty(config.WebhookConfig.PayloadTitle) ? "Stock available" : config.WebhookConfig.PayloadTitle;
             var payloadBody = string.IsNullOrEmpty(config.WebhookConfig.PayloadBody) ? config.Name : config.WebhookConfig.PayloadBody;
 
-            this._webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody);
+            this.webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody);
 
             LogConfig(config);
         }
 
 
-        public void StartService() => _task.Start();
+        public void StartService() => task.Start();
 
 
-        public void StopService() => _cts.Cancel();
+        public void StopService() => cts.Cancel();
 
 
         private Task CreateTask(CancellationToken token)
@@ -78,25 +78,25 @@ namespace ShopStockNotifier
             return new Task(async () =>
             {
                 int refresh;
-                while (!_cts.Token.IsCancellationRequested)
+                while (!cts.Token.IsCancellationRequested)
                 {
-                    refresh = _refresh;
+                    refresh = refreshTime;
                     if (await IsAvailable())
                     {
-                        refresh = _cooldown;
+                        refresh = cooldownTime;
                         var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
-                        _logger.Log("".PadLeft(65, '='));
-                        _logger.Log($"Stock Available!!!: [{_name}] at URL [{_url}]. Sending notification message to webhook");
-                        _logger.Log($"Checking again in {refresh} seconds{minstr}");
-                        _logger.Log("".PadLeft(65, '='));
-                        _webhook.Notify();
+                        logger.Log("".PadLeft(65, '='));
+                        logger.Log($"Stock Available!!!: [{productName}] at URL [{url}]. Sending notification message to webhook");
+                        logger.Log($"Checking again in {refresh} seconds{minstr}");
+                        logger.Log("".PadLeft(65, '='));
+                        webhook.Notify();
                     }
                     else
                     {
                         var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
-                        _logger.Log($"NOT available: [{_name}] Trying again in {refresh} seconds{minstr}");
+                        logger.Log($"NOT available: [{productName}] Trying again in {refresh} seconds{minstr}");
                     }
-                    await Task.Delay(refresh * 1000, _cts.Token);
+                    await Task.Delay(refresh * 1000, cts.Token);
                 }
             });
         }
@@ -106,10 +106,10 @@ namespace ShopStockNotifier
         {
             bool result = false;
 
-            _logger.Log($"Checking for [{_name}] at URL [{_url}]");
+            logger.Log($"Checking for [{productName}] at URL [{url}]");
             try
             {
-                string response = await GetHTMLAsync(_url);
+                string response = await GetHTMLAsync(url);
 
                 HtmlDocument htmlDoc = new HtmlDocument();
                 htmlDoc.LoadHtml(response);
@@ -125,10 +125,10 @@ namespace ShopStockNotifier
                     foreach (var element in elements)
                     {
                         // Check if we can find _checker inside our innerhtml
-                        ret = element.OuterHtml.Contains(_checker, StringComparison.OrdinalIgnoreCase);
+                        ret = element.OuterHtml.Contains(checker, StringComparison.OrdinalIgnoreCase);
 
                         // If our search type is 'Unavailable' then we invert our result
-                        ret = _checkType == CheckType.Unavailable ? !ret : ret;
+                        ret = checkType == CheckType.Unavailable ? !ret : ret;
 
                         // We are done if we found something
                         if (ret) return ret;
@@ -136,9 +136,9 @@ namespace ShopStockNotifier
                     return ret;
                 };
 
-                if (_mode == SearchMode.DivClass)
+                if (searchMode == SearchMode.DivClass)
                 {
-                    foreach (var div in _div)
+                    foreach (var div in divList)
                     {
                         string nodes = $"//div[contains(@class, '{div}')]";
                         result = funcCheck(nodes);
@@ -147,7 +147,7 @@ namespace ShopStockNotifier
                 }
                 else
                 {
-                    foreach (var ids in _id)
+                    foreach (var ids in idList)
                     {
                         // AND all of the inner ID's
                         string nodes = $"//*[{string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))}]";
@@ -158,7 +158,7 @@ namespace ShopStockNotifier
             }
             catch (Exception ex) 
             {
-                _logger.Log($"Error: {ex}");
+                logger.Log($"Error: {ex}");
 
                 result = false;
             }
@@ -167,7 +167,7 @@ namespace ShopStockNotifier
         }
 
 
-        private async Task<string> GetHTMLAsync(string url)
+        private async Task<string> GetHTMLAsync(string productUrl)
         {
             using (var pw = await Playwright.CreateAsync())
             {
@@ -176,26 +176,26 @@ namespace ShopStockNotifier
                     Headless = true,
                 });
                 var page = await browser.NewPageAsync();
-                await page.GotoAsync(_url);
+                await page.GotoAsync(productUrl);
                 //await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
                 // Generate selector
                 string selector = "";
-                if (_mode == SearchMode.DivClass)
+                if (searchMode == SearchMode.DivClass)
                 {
                     // OR each div class
-                    selector = $"//div[{string.Join(" or ", _div.Select(div => $"contains(@class, '{div}')"))}]";
+                    selector = $"//div[{string.Join(" or ", divList.Select(div => $"contains(@class, '{div}')"))}]";
                 }
                 else
                 {
                     // Join AND the interior list of ids and then OR the outside list 
-                    selector = $"//*[{string.Join(" or ", _id.Select(ids => $"({string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))})"))}]";
+                    selector = $"//*[{string.Join(" or ", idList.Select(ids => $"({string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))})"))}]";
                 }
                 await page.WaitForSelectorAsync(selector);
                 string result = await page.ContentAsync();
                 return result;  
             }
-            throw new Exception($"Request to {url} failed.");
+            throw new Exception($"Request to {productUrl} failed.");
         }
 
 
@@ -233,7 +233,7 @@ namespace ShopStockNotifier
             {
                 // Log here instead, otherwise it will log at the end which isnt cool
                 doLog = false;
-                _logger.Log($"{prop.Name.PadRight(14, ' ')}:{val}");
+                logger.Log($"{prop.Name.PadRight(14, ' ')}:{val}");
 
                 var cconfig = (WebhookConfig)(prop.GetValue(obj, null) ?? new WebhookConfig());
                 foreach (var pprop in cconfig.GetType().GetProperties())
@@ -242,14 +242,14 @@ namespace ShopStockNotifier
                 }
             }
             if (doLog)
-                _logger.Log($"{"".PadLeft(offset) + (prop.Name.PadRight(14, ' '))}:{val}");
+                logger.Log($"{"".PadLeft(offset) + (prop.Name.PadRight(14, ' '))}:{val}");
 
         }
 
 
         public void LogConfig(SiteConfig config)
         {
-            _logger.LogPadCenter("Loading Site Configuration", 70, '*');
+            logger.LogPadCenter("Loading Site Configuration", 70, '*');
 
             foreach (var prop in config.GetType().GetProperties())
             {
