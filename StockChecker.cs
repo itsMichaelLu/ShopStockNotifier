@@ -1,9 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Text;
 using HtmlAgilityPack;
 using Microsoft.Playwright;
 
@@ -23,7 +24,7 @@ namespace ShopStockNotifier
 
     internal class StockChecker
     {
-
+        private Logger _logger;
         private string _url { get; set; }
         private List<string> _div { get; set; }
         private List<List<string>> _id { get; set; }
@@ -31,12 +32,13 @@ namespace ShopStockNotifier
         private CheckType _checkType { get; set; }
         private string _alias { get; set; }
         private int _refresh { get; set; }
+        private int _cooldown { get; set; }
         private SearchMode _mode { get; set; }
         private Task _task { get; set; }
         private CancellationTokenSource _cts { get; set; }
         private RestSender _webhook { get; set; }
 
- 
+
         public StockChecker(SiteConfig config, CheckType type = CheckType.Unavailable)
         {
             this._url = config.Url;
@@ -46,50 +48,61 @@ namespace ShopStockNotifier
             this._alias = config.Name;
             this._mode = config.SearchMode;
             this._refresh = config.RefreshTime;
+            this._cooldown = config.InStockCooldownTime;
             // TODO Make this checktype part of config
             this._checkType = type;            
             this._cts = new CancellationTokenSource();
-            //this._thread = CreateThread();
-            this._task = CreateTask(_cts.Token);
+            this._task = Task.CompletedTask;
 
             var payloadUrl = string.IsNullOrEmpty(config.WebhookConfig.PayloadUrl) ? config.Url : config.WebhookConfig.PayloadUrl;
             var payloadTitle = string.IsNullOrEmpty(config.WebhookConfig.PayloadTitle) ? "Stock available" : config.WebhookConfig.PayloadTitle;
             var payloadBody = string.IsNullOrEmpty(config.WebhookConfig.PayloadBody) ? config.Name : config.WebhookConfig.PayloadBody;
 
             this._webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody);
+            _logger = new Logger(RuntimeHelpers.GetHashCode(config));
+            LogConfig(config);
         }
 
-        private Task CreateTask(CancellationToken token)
+
+        public void StartService()
         {
-            return new Task(async () =>
+            if (_task == null || _task.IsCompleted)
             {
-                while (!token.IsCancellationRequested)
+                _task = Task.Run(async () =>
                 {
-                    var refresh = _refresh;
-                    if (await IsAvailable())
+                    int refresh;
+                    while (!_cts.Token.IsCancellationRequested)
                     {
-                        Log($"{_alias} Is Available! Sending notification message to home assistant");
-                        // set to 5 minutes wait
-                        refresh = 600;
-                        _webhook.Notify();
+                        refresh = _refresh;
+                        if (await IsAvailable())
+                        {
+                            refresh = _cooldown;
+                            var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
+                            _logger.Log("".PadLeft(65, '='));
+                            _logger.Log($"{_alias} Is Available! Sending notification message to home assistant");
+                            _logger.Log($"Checking again in {refresh} seconds{minstr}");
+                            _logger.Log("".PadLeft(65, '='));
+                            _webhook.Notify();
+                        }
+                        else
+                        {
+                            var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
+                            _logger.Log($"{_alias} Not available. Trying again in {refresh} seconds{minstr}");
+                        }
+                        await Task.Delay(refresh * 1000, _cts.Token);
                     }
-                    else
-                    {
-                        Log($"{_alias} Not available");
-                    }
-                    await Task.Delay(refresh * 1000, token);
-                }
-            });
+                }, _cts.Token);
+            }
         }
 
-        public void StartService() => _task.Start();
 
         public void StopService() => _cts.Cancel();
+
 
         public async Task<bool> IsAvailable()
         {
             bool result = false;
-            Log($"Attempting to check url{(_alias != "" ? $" for {_alias} " : "")}: {_url}");
+            _logger.Log($"Attempting to check url{(_alias != "" ? $" for {_alias} " : "")}: {_url}");
             try
             {
                 string response = await GetHTMLAsync2(_url);
@@ -140,7 +153,7 @@ namespace ShopStockNotifier
             }
             catch (Exception ex) 
             {
-                Log($"Error: {ex}");
+                _logger.Log($"Error: {ex}");
 
                 result = false;
             }
@@ -148,18 +161,65 @@ namespace ShopStockNotifier
             return result;
         }
 
-        private string GetTimeStringNow()
+
+        private void LogProps(PropertyInfo prop, Object obj, int offset = 0)
         {
-            return DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            bool doLog = true;
+            var type = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+            string val = "";
+            if (type == typeof(string))
+            {
+                //_logger.Log($"{prop.Name.PadRight(20, ' ')}:{prop.GetValue(config,null)?.ToString()}");
+                val = prop.GetValue(obj, null)?.ToString() ?? "";
+            }
+            else if (type == typeof(int))
+            {
+                val = prop.GetValue(obj, null)?.ToString() ?? "";
+            }
+            else if (type == typeof(List<string>))
+            {
+                var tmp = (List<string>)(prop.GetValue(obj, null) ?? new List<string>());
+                val = $"[{string.Join(',', tmp)}]";
+            }
+            else if (type == typeof(SearchMode))
+            {
+                var tmp = (SearchMode)(prop.GetValue(obj, null) ?? SearchMode.DivClass);
+                val = tmp.ToString();
+            }
+            else if (type == typeof(List<List<string>>))
+            {
+                var tmp = (List<List<string>>)(prop.GetValue(obj, null) ?? new List<List<string>>());
+                var tmp2 = tmp.Select(x => $"[{string.Join(',', x)}]");
+                val = $"[{string.Join(',', tmp2)}]";
+            }
+            else if (type == typeof(WebhookConfig))
+            {
+                // Log here instead, otherwise it will log at the end which isnt cool
+                doLog = false;
+                _logger.Log($"{prop.Name.PadRight(14, ' ')}:{val}");
+
+                var cconfig = (WebhookConfig)(prop.GetValue(obj, null) ?? new WebhookConfig());
+                foreach (var pprop in cconfig.GetType().GetProperties())
+                {
+                    LogProps(pprop, cconfig, 3);
+                }
+            }
+            if (doLog)
+                _logger.Log($"{"".PadLeft(offset) + (prop.Name.PadRight(14, ' '))}:{val}");
+
         }
 
-        private void Log(string message)
-        {
-            string time = String.Format("{0,-23}", GetTimeStringNow());
-            string pid = String.Format("[TID 0x{0:X4}]    ", _task.Id);
 
-            Console.WriteLine($"{time}{pid}{message}");
+        public void LogConfig(SiteConfig config)
+        {
+            _logger.LogPadCenter("Loading Site Configuration", 70, '*');
+
+            foreach (var prop in config.GetType().GetProperties())
+            {
+                LogProps(prop, config);
+            }
         }
+
 
         public static async Task<string> GetHTMLAsync(string url)
         {
@@ -175,6 +235,7 @@ namespace ShopStockNotifier
             throw new Exception($"Request to {url} failed.");
         }
 
+
         public async Task<string> GetHTMLAsync2(string url)
         {
             using (var pw = await Playwright.CreateAsync())
@@ -187,7 +248,6 @@ namespace ShopStockNotifier
                 await page.GotoAsync(_url);
                 //await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
-
                 // Generate selector
                 string selector = "";
                 if (_mode == SearchMode.DivClass)
@@ -199,15 +259,13 @@ namespace ShopStockNotifier
                 {
                     // Join AND the interior list of ids and then OR the outside list 
                     selector = $"//*[{string.Join(" or ", _id.Select(ids => $"({string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))})"))}]";
-
                 }
                 await page.WaitForSelectorAsync(selector);
                 string result = await page.ContentAsync();
-                //Log(result);
                 return result;  
             }
-
             throw new Exception($"Request to {url} failed.");
         }
+
     }
  }

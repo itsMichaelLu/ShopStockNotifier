@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
+﻿
 namespace ShopStockNotifier
 {
 
@@ -11,11 +6,13 @@ namespace ShopStockNotifier
     {
         public required List<SiteConfig> SiteConfig { get; set; }
     }
+
     public class SiteConfig
     {
         public required string Name { get; set; }
         public required string Url { get; set; }
         public int RefreshTime { get; set; } = 30;
+        public int InStockCooldownTime { get; set; } = 300;
         public required SearchMode SearchMode { get; set; }
         public List<string> Div { get; set; } = new List<string>();
         public List<List<string>> Id { get; set; } = new List<List<string>>();
@@ -23,6 +20,7 @@ namespace ShopStockNotifier
         public required WebhookConfig WebhookConfig { get; set; }
 
     }
+
     public class WebhookConfig
     {
         public string WebhookUrl { get; set; } = "";

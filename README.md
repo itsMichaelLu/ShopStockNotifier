@@ -1,1 +1,1 @@
-# HomeAssistantUpdater
+# Shop Stock Notifier
