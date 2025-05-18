@@ -30,7 +30,7 @@ namespace ShopStockNotifier
         private List<List<string>> _id { get; set; }
         private string _checker { get; set; }
         private CheckType _checkType { get; set; }
-        private string _alias { get; set; }
+        private string _name { get; set; }
         private int _refresh { get; set; }
         private int _cooldown { get; set; }
         private SearchMode _mode { get; set; }
@@ -41,68 +41,72 @@ namespace ShopStockNotifier
 
         public StockChecker(SiteConfig config, CheckType type = CheckType.Unavailable)
         {
+            // Create logger with a 'unique' hash for this instance
+            _logger = new Logger(RuntimeHelpers.GetHashCode(this));
+
             this._url = config.Url;
             this._div = config.Div;
             this._id = config.Id;
             this._checker = config.CheckString;
-            this._alias = config.Name;
+            this._name = config.Name;
             this._mode = config.SearchMode;
             this._refresh = config.RefreshTime;
             this._cooldown = config.InStockCooldownTime;
             // TODO Make this checktype part of config
             this._checkType = type;            
             this._cts = new CancellationTokenSource();
-            this._task = Task.CompletedTask;
+            this._task = CreateTask(_cts.Token);
 
             var payloadUrl = string.IsNullOrEmpty(config.WebhookConfig.PayloadUrl) ? config.Url : config.WebhookConfig.PayloadUrl;
             var payloadTitle = string.IsNullOrEmpty(config.WebhookConfig.PayloadTitle) ? "Stock available" : config.WebhookConfig.PayloadTitle;
             var payloadBody = string.IsNullOrEmpty(config.WebhookConfig.PayloadBody) ? config.Name : config.WebhookConfig.PayloadBody;
 
             this._webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody);
-            _logger = new Logger(RuntimeHelpers.GetHashCode(config));
+
             LogConfig(config);
         }
 
 
-        public void StartService()
-        {
-            if (_task == null || _task.IsCompleted)
-            {
-                _task = Task.Run(async () =>
-                {
-                    int refresh;
-                    while (!_cts.Token.IsCancellationRequested)
-                    {
-                        refresh = _refresh;
-                        if (await IsAvailable())
-                        {
-                            refresh = _cooldown;
-                            var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
-                            _logger.Log("".PadLeft(65, '='));
-                            _logger.Log($"{_alias} Is Available! Sending notification message to home assistant");
-                            _logger.Log($"Checking again in {refresh} seconds{minstr}");
-                            _logger.Log("".PadLeft(65, '='));
-                            _webhook.Notify();
-                        }
-                        else
-                        {
-                            var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
-                            _logger.Log($"{_alias} Not available. Trying again in {refresh} seconds{minstr}");
-                        }
-                        await Task.Delay(refresh * 1000, _cts.Token);
-                    }
-                }, _cts.Token);
-            }
-        }
+        public void StartService() => _task.Start();
 
 
         public void StopService() => _cts.Cancel();
 
 
-        public async Task<bool> IsAvailable()
+        private Task CreateTask(CancellationToken token)
+        {
+            return new Task(async () =>
+            {
+                int refresh;
+                while (!_cts.Token.IsCancellationRequested)
+                {
+                    refresh = _refresh;
+                    if (await IsAvailable())
+                    {
+                        refresh = _cooldown;
+                        var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
+                        _logger.Log("".PadLeft(65, '='));
+                        _logger.Log($"Stock Available!!!: [{_name}] at URL [{_url}]. Sending notification message to webhook");
+                        _logger.Log($"Checking again in {refresh} seconds{minstr}");
+                        _logger.Log("".PadLeft(65, '='));
+                        _webhook.Notify();
+                    }
+                    else
+                    {
+                        var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
+                        _logger.Log($"NOT available: [{_name}] Trying again in {refresh} seconds{minstr}");
+                    }
+                    await Task.Delay(refresh * 1000, _cts.Token);
+                }
+            });
+        }
+
+
+        private async Task<bool> IsAvailable()
         {
             bool result = false;
-            _logger.Log($"Attempting to check url{(_alias != "" ? $" for {_alias} " : "")}: {_url}");
+
+            _logger.Log($"Checking for [{_name}] at URL [{_url}]");
             try
             {
                 string response = await GetHTMLAsync(_url);
@@ -110,7 +114,7 @@ namespace ShopStockNotifier
                 HtmlDocument htmlDoc = new HtmlDocument();
                 htmlDoc.LoadHtml(response);
 
-                // function to reuse
+                // Inline function to search a node
                 Func<string, bool> funcCheck = node =>
                 {
                     bool ret = false;
@@ -145,6 +149,7 @@ namespace ShopStockNotifier
                 {
                     foreach (var ids in _id)
                     {
+                        // AND all of the inner ID's
                         string nodes = $"//*[{string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))}]";
                         result = funcCheck(nodes);
                         if (result) break;
@@ -159,6 +164,38 @@ namespace ShopStockNotifier
             }
 
             return result;
+        }
+
+
+        private async Task<string> GetHTMLAsync(string url)
+        {
+            using (var pw = await Playwright.CreateAsync())
+            {
+                await using var browser = await pw.Firefox.LaunchAsync(new()
+                {
+                    Headless = true,
+                });
+                var page = await browser.NewPageAsync();
+                await page.GotoAsync(_url);
+                //await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+                // Generate selector
+                string selector = "";
+                if (_mode == SearchMode.DivClass)
+                {
+                    // OR each div class
+                    selector = $"//div[{string.Join(" or ", _div.Select(div => $"contains(@class, '{div}')"))}]";
+                }
+                else
+                {
+                    // Join AND the interior list of ids and then OR the outside list 
+                    selector = $"//*[{string.Join(" or ", _id.Select(ids => $"({string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))})"))}]";
+                }
+                await page.WaitForSelectorAsync(selector);
+                string result = await page.ContentAsync();
+                return result;  
+            }
+            throw new Exception($"Request to {url} failed.");
         }
 
 
@@ -219,37 +256,5 @@ namespace ShopStockNotifier
                 LogProps(prop, config);
             }
         }
-
-        public async Task<string> GetHTMLAsync(string url)
-        {
-            using (var pw = await Playwright.CreateAsync())
-            {
-                await using var browser = await pw.Firefox.LaunchAsync(new()
-                {
-                    Headless = true,
-                });
-                var page = await browser.NewPageAsync();
-                await page.GotoAsync(_url);
-                //await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
-
-                // Generate selector
-                string selector = "";
-                if (_mode == SearchMode.DivClass)
-                {
-                    // OR each div class
-                    selector = $"//div[{string.Join(" or ", _div.Select(div => $"contains(@class, '{div}')"))}]";
-                }
-                else
-                {
-                    // Join AND the interior list of ids and then OR the outside list 
-                    selector = $"//*[{string.Join(" or ", _id.Select(ids => $"({string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))})"))}]";
-                }
-                await page.WaitForSelectorAsync(selector);
-                string result = await page.ContentAsync();
-                return result;  
-            }
-            throw new Exception($"Request to {url} failed.");
-        }
-
     }
- }
+}
