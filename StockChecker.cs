@@ -74,19 +74,10 @@ namespace ShopStockNotifier
         }
 
 
-        public void StartService()
-        {
-            task = Task.Factory.StartNew(async () =>
-            {
-                await CreateTask(cts.Token);
-            }, cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
-        }
-
-
+        public void StartService() => task = RunTask(cts.Token);
         public void StopService() => cts.Cancel();
 
-
-        private Task CreateTask(CancellationToken token)
+        private Task RunTask(CancellationToken token)
         {
             return Task.Run(async () =>
             {
@@ -102,7 +93,7 @@ namespace ShopStockNotifier
                         logger.Log($"Stock Available!!!: [{productName}] at URL [{url}]. Sending notification message to webhook");
                         logger.Log($"Checking again in {refresh} seconds{minstr}");
                         logger.LogHeader();
-                        webhook.Notify();
+                        webhook.Notify(); 
                     }
                     else
                     {
