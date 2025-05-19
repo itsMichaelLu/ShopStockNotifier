@@ -29,12 +29,13 @@ namespace ShopStockNotifier
             IBrowser browser = args.Length > 0 && string.Equals(args[0], "Chrome", StringComparison.OrdinalIgnoreCase)
                 ? await playwright.Chromium.LaunchAsync(new() { Headless = true })
                 : await playwright.Firefox.LaunchAsync(new() { Headless = true });
+            IBrowserContext browserContext = await browser.NewContextAsync();
             // Dispose browser on exit
             AppDomain.CurrentDomain.ProcessExit += async (_, __) => await CleanupAsync(playwright, browser);
             Console.CancelKeyPress += async (_, __) => await CleanupAsync(playwright, browser);
 
             // Create all instances
-            var stocks = config.SiteConfig.Select(site => new StockChecker(site, browser)).ToList();
+            var stocks = config.SiteConfig.Select(site => new StockChecker(site, browserContext)).ToList();
             logger.LogHeader("Configuration Loaded");
 
             // Run them all

@@ -24,8 +24,10 @@ namespace ShopStockNotifier
 
     internal class StockChecker
     {
+        private static readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
+
         private readonly Logger logger;
-        private IBrowser browser { get; set; }
+        private IBrowserContext browser { get; set; }
         private string url { get; set; }
         private List<string> divList { get; set; }
         private List<List<string>> idList { get; set; }
@@ -40,7 +42,7 @@ namespace ShopStockNotifier
         private RestSender webhook { get; set; }
 
 
-        public StockChecker(SiteConfig config, IBrowser browser, CheckType type = CheckType.Unavailable)
+        public StockChecker(SiteConfig config, IBrowserContext browser, CheckType type = CheckType.Unavailable)
         {
             // Create logger with a 'unique' hash for this instance
             logger = new Logger(RuntimeHelpers.GetHashCode(this));
@@ -72,7 +74,13 @@ namespace ShopStockNotifier
         }
 
 
-        public void StartService() => task = CreateTask(cts.Token);
+        public void StartService()
+        {
+            task = Task.Factory.StartNew(async () =>
+            {
+                await CreateTask(cts.Token);
+            }, cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
+        }
 
 
         public void StopService() => cts.Cancel();
@@ -121,7 +129,7 @@ namespace ShopStockNotifier
             logger.Log($"Checking for [{productName}] at URL [{url}]");
             try
             {
-                string response = await GetHTMLAsync(url);
+                string response = await GetHTMLAsyncThrottled(url);
 
                 HtmlDocument htmlDoc = new HtmlDocument();
                 htmlDoc.LoadHtml(response);
@@ -181,6 +189,19 @@ namespace ShopStockNotifier
             return result;
         }
 
+        private async Task<string> GetHTMLAsyncThrottled(string productUrl)
+        {
+            // We need to ensure we dont run all at the same time otherwise it can overload the cpu
+            await _semaphore.WaitAsync();
+            try
+            {
+                return await GetHTMLAsync(productUrl);
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
+        }
 
         private async Task<string> GetHTMLAsync(string productUrl)
         {
