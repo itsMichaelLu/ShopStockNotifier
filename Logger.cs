@@ -10,12 +10,16 @@ namespace ShopStockNotifier
 {
     public class Logger
     {
+        private readonly int _id = 0;
+        private static readonly object _consoleLock = new();
+
         private static readonly ConsoleColor[] AvailableColors = Enum.GetValues(typeof(ConsoleColor))
             .Cast<ConsoleColor>()
             .Where(c => c != Console.BackgroundColor && c != ConsoleColor.Black) // skip background and black
             .ToArray();
 
-        private readonly int _id = 0;
+        private const int spacing = 2;
+
         public Logger(int id = 0)
         {
             this._id = id & 0xFFFF; 
@@ -32,25 +36,29 @@ namespace ShopStockNotifier
             ? ConsoleColor.White
             : AvailableColors[_id % AvailableColors.Length];
 
-            if (_id == 0)
-            {
-                color = ConsoleColor.White; // Thread 1 is always white
-            }
-            else
-            {
-                int index = _id % AvailableColors.Length;
-                color = AvailableColors[index];
-            }
-            string time = String.Format("{0,-23}", GetTimeStringNow());
-            string pid = String.Format("[OID=0x{0:X4}]    ", _id);
+            var timePadded = GetTimeStringNow() + new string(' ', spacing);
+            string pidPadded = $"[OID=0x{_id:X4}]" + new string(' ', spacing); 
 
-            lock (Console.Out) // prevent output overlap
+            lock (_consoleLock) // prevent output overlap
             {
                 var originalColor = Console.ForegroundColor;
                 Console.ForegroundColor = color;
-                Console.WriteLine($"{time}{pid}{message}");
+                Console.WriteLine($"{timePadded}{pidPadded}{message}");
                 Console.ForegroundColor = originalColor;
             }
+        }
+
+        public void LogConfig(string left, string right, int offset = 0, int align = -20)
+        {
+            // We must do it this way because {} requires compile time constant for pad
+            var left2 = string.Format("{0," + align + "}", left);
+            var indent = offset == 0 ? "" : new string(' ', offset);
+            Log($"{indent}{left2}:{right}");
+            
+        }
+        public void LogHeader(string message = "", char pad = '=', int length = 70)
+        {
+            LogPadCenter(message, length, pad);
         }
 
         public void LogPadCenter(string message, int padLength, char pad)

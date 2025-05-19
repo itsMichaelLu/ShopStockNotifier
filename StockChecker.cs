@@ -24,7 +24,8 @@ namespace ShopStockNotifier
 
     internal class StockChecker
     {
-        private Logger logger;
+        private readonly Logger logger;
+        private IBrowser browser { get; set; }
         private string url { get; set; }
         private List<string> divList { get; set; }
         private List<List<string>> idList { get; set; }
@@ -39,7 +40,7 @@ namespace ShopStockNotifier
         private RestSender webhook { get; set; }
 
 
-        public StockChecker(SiteConfig config, CheckType type = CheckType.Unavailable)
+        public StockChecker(SiteConfig config, IBrowser browser, CheckType type = CheckType.Unavailable)
         {
             // Create logger with a 'unique' hash for this instance
             logger = new Logger(RuntimeHelpers.GetHashCode(this));
@@ -49,13 +50,15 @@ namespace ShopStockNotifier
             this.idList = config.Id;
             this.checker = config.CheckString;
             this.productName = config.Name;
-            this.searchMode = config.SearchMode;
             this.refreshTime = config.RefreshTime;
             this.cooldownTime = config.InStockCooldownTime;
-            // TODO Make this checktype part of config
             this.checkType = type;            
             this.cts = new CancellationTokenSource();
-            this.task = CreateTask(cts.Token);
+            this.task = Task.CompletedTask;
+            this.searchMode = Enum.IsDefined(typeof(SearchMode), config.SearchMode)
+                ? config.SearchMode
+                : SearchMode.DivClass;
+
 
             var payloadUrl = string.IsNullOrEmpty(config.WebhookConfig.PayloadUrl) ? config.Url : config.WebhookConfig.PayloadUrl;
             var payloadTitle = string.IsNullOrEmpty(config.WebhookConfig.PayloadTitle) ? "Stock available" : config.WebhookConfig.PayloadTitle;
@@ -63,11 +66,13 @@ namespace ShopStockNotifier
 
             this.webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody);
 
+            this.browser = browser;
+
             LogConfig(config);
         }
 
 
-        public void StartService() => task.Start();
+        public void StartService() => task = CreateTask(cts.Token);
 
 
         public void StopService() => cts.Cancel();
@@ -75,20 +80,20 @@ namespace ShopStockNotifier
 
         private Task CreateTask(CancellationToken token)
         {
-            return new Task(async () =>
+            return Task.Run(async () =>
             {
                 int refresh;
-                while (!cts.Token.IsCancellationRequested)
+                while (!token.IsCancellationRequested)
                 {
                     refresh = refreshTime;
                     if (await IsAvailable())
                     {
                         refresh = cooldownTime;
                         var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
-                        logger.Log("".PadLeft(65, '='));
+                        logger.LogHeader();
                         logger.Log($"Stock Available!!!: [{productName}] at URL [{url}]. Sending notification message to webhook");
                         logger.Log($"Checking again in {refresh} seconds{minstr}");
-                        logger.Log("".PadLeft(65, '='));
+                        logger.LogHeader();
                         webhook.Notify();
                     }
                     else
@@ -96,9 +101,16 @@ namespace ShopStockNotifier
                         var minstr = refresh > 60 ? $" ({refresh / 60.0:F1} mins)" : "";
                         logger.Log($"NOT available: [{productName}] Trying again in {refresh} seconds{minstr}");
                     }
-                    await Task.Delay(refresh * 1000, cts.Token);
+                    try
+                    {
+                        await Task.Delay(refresh * 1000, token);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        break;
+                    }
                 }
-            });
+            }, token);
         }
 
 
@@ -120,7 +132,10 @@ namespace ShopStockNotifier
                     bool ret = false;
                     var elements = htmlDoc.DocumentNode.SelectNodes(node);
                     if (elements == null)
-                        throw new Exception($"Could not find in response '{node}'");
+                    {
+                        logger.Log($"Could not find in response '{node}'");
+                        return false;
+                    }
 
                     foreach (var element in elements)
                     {
@@ -169,33 +184,26 @@ namespace ShopStockNotifier
 
         private async Task<string> GetHTMLAsync(string productUrl)
         {
-            using (var pw = await Playwright.CreateAsync())
-            {
-                await using var browser = await pw.Firefox.LaunchAsync(new()
-                {
-                    Headless = true,
-                });
-                var page = await browser.NewPageAsync();
-                await page.GotoAsync(productUrl);
-                //await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+            var page = await browser.NewPageAsync();
+            await page.GotoAsync(productUrl);
 
-                // Generate selector
-                string selector = "";
-                if (searchMode == SearchMode.DivClass)
-                {
-                    // OR each div class
-                    selector = $"//div[{string.Join(" or ", divList.Select(div => $"contains(@class, '{div}')"))}]";
-                }
-                else
-                {
-                    // Join AND the interior list of ids and then OR the outside list 
-                    selector = $"//*[{string.Join(" or ", idList.Select(ids => $"({string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))})"))}]";
-                }
-                await page.WaitForSelectorAsync(selector);
-                string result = await page.ContentAsync();
-                return result;  
+            // Generate selector
+            string selector = "";
+            if (searchMode == SearchMode.DivClass)
+            {
+                // OR each div class
+                selector = $"//div[{string.Join(" or ", divList.Select(div => $"contains(@class, '{div}')"))}]";
             }
-            throw new Exception($"Request to {productUrl} failed.");
+            else
+            {
+                // Join AND the interior list of ids and then OR the outside list 
+                selector = $"//*[{string.Join(" or ", idList.Select(ids => $"({string.Join(" and ", ids.Select(s => $"contains(@id, '{s}')"))})"))}]";
+            }
+            await page.WaitForSelectorAsync(selector);
+            string result = await page.ContentAsync();
+
+            await page.CloseAsync();
+            return result;
         }
 
 
@@ -204,24 +212,19 @@ namespace ShopStockNotifier
             bool doLog = true;
             var type = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
             string val = "";
-            if (type == typeof(string))
-            {
-                //_logger.Log($"{prop.Name.PadRight(20, ' ')}:{prop.GetValue(config,null)?.ToString()}");
-                val = prop.GetValue(obj, null)?.ToString() ?? "";
-            }
-            else if (type == typeof(int))
+            if (type == typeof(string) || type == typeof(int))
             {
                 val = prop.GetValue(obj, null)?.ToString() ?? "";
-            }
-            else if (type == typeof(List<string>))
-            {
-                var tmp = (List<string>)(prop.GetValue(obj, null) ?? new List<string>());
-                val = $"[{string.Join(',', tmp)}]";
             }
             else if (type == typeof(SearchMode))
             {
                 var tmp = (SearchMode)(prop.GetValue(obj, null) ?? SearchMode.DivClass);
                 val = tmp.ToString();
+            }
+            else if (type == typeof(List<string>))
+            {
+                var tmp = (List<string>)(prop.GetValue(obj, null) ?? new List<string>());
+                val = $"[{string.Join(',', tmp)}]";
             }
             else if (type == typeof(List<List<string>>))
             {
@@ -233,23 +236,31 @@ namespace ShopStockNotifier
             {
                 // Log here instead, otherwise it will log at the end which isnt cool
                 doLog = false;
-                logger.Log($"{prop.Name.PadRight(14, ' ')}:{val}");
+                logger.LogConfig(prop.Name, val);
 
                 var cconfig = (WebhookConfig)(prop.GetValue(obj, null) ?? new WebhookConfig());
                 foreach (var pprop in cconfig.GetType().GetProperties())
                 {
-                    LogProps(pprop, cconfig, 3);
+                    // Set an offset of 2
+                    LogProps(pprop, cconfig, offset + 2);
                 }
             }
+
+            // Dont print out any sensitive info
+            if (prop.Name == nameof(WebhookConfig.BearerToken))
+            {
+                val = new string('*', val.Length);
+            }
+
             if (doLog)
-                logger.Log($"{"".PadLeft(offset) + (prop.Name.PadRight(14, ' '))}:{val}");
+                logger.LogConfig(prop.Name, val, offset: offset);
 
         }
 
 
         public void LogConfig(SiteConfig config)
         {
-            logger.LogPadCenter("Loading Site Configuration", 70, '*');
+            logger.LogHeader("Loading Site Configuration", pad: '*');
 
             foreach (var prop in config.GetType().GetProperties())
             {
