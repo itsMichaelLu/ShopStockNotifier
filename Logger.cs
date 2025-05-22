@@ -10,19 +10,21 @@ namespace ShopStockNotifier
 {
     public class Logger
     {
+        private const int SPACING = 2;
         private readonly int _id = 0;
+        private readonly ConsoleColor _color;
         private static readonly object _consoleLock = new();
-
-        private static readonly ConsoleColor[] AvailableColors = Enum.GetValues(typeof(ConsoleColor))
-            .Cast<ConsoleColor>()
-            .Where(c => c != Console.BackgroundColor && c != ConsoleColor.Black) // skip background and black
-            .ToArray();
-
-        private const int spacing = 2;
+        private static readonly object _colorLock = new();
+        private static readonly Queue<ConsoleColor> ColorQueue = new(
+            Enum.GetValues<ConsoleColor>()
+                .Where(c => c != Console.BackgroundColor && c != ConsoleColor.Black && c != ConsoleColor.White)
+                .OrderBy(_ => Guid.NewGuid())
+        );
 
         public Logger(int id = 0)
         {
-            this._id = id & 0xFFFF; 
+            this._id = id & 0xFFFF;
+            _color = GetConsoleColor(id);
         }
 
         private static string GetTimeStringNow()
@@ -30,19 +32,28 @@ namespace ShopStockNotifier
             return DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         }
 
+        private static ConsoleColor GetConsoleColor(int id)
+        {
+            if (id == 0) return ConsoleColor.White;
+            lock (_colorLock)
+            {
+                var color = ColorQueue.Dequeue();
+                ColorQueue.Enqueue(color);
+                return color;
+            }
+        }
+
         public void Log(string message)
         {
-            ConsoleColor color = (_id == 0)
-            ? ConsoleColor.White
-            : AvailableColors[_id % AvailableColors.Length];
+            if (_id != 0) ColorQueue.Enqueue(_color);
 
-            var timePadded = GetTimeStringNow() + new string(' ', spacing);
-            string pidPadded = $"[OID=0x{_id:X4}]" + new string(' ', spacing); 
+            var timePadded = GetTimeStringNow() + new string(' ', SPACING);
+            string pidPadded = $"[OID=0x{_id:X4}]" + new string(' ', SPACING); 
 
             lock (_consoleLock) // prevent output overlap
             {
                 var originalColor = Console.ForegroundColor;
-                Console.ForegroundColor = color;
+                Console.ForegroundColor = _color;
                 Console.WriteLine($"{timePadded}{pidPadded}{message}");
                 Console.ForegroundColor = originalColor;
             }
@@ -56,6 +67,7 @@ namespace ShopStockNotifier
             Log($"{indent}{left2}:{right}");
             
         }
+
         public void LogHeader(string message = "", char pad = '=', int length = 70)
         {
             LogPadCenter(message, length, pad);

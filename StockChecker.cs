@@ -41,7 +41,6 @@ namespace ShopStockNotifier
         private CancellationTokenSource cts { get; set; }
         private RestSender webhook { get; set; }
 
-
         public StockChecker(SiteConfig config, IBrowserContext browser, CheckType type = CheckType.Unavailable)
         {
             // Create logger with a 'unique' hash for this instance
@@ -60,22 +59,31 @@ namespace ShopStockNotifier
             this.searchMode = Enum.IsDefined(typeof(SearchMode), config.SearchMode)
                 ? config.SearchMode
                 : SearchMode.DivClass;
-
-
+            // Payload stuff
             var payloadUrl = string.IsNullOrEmpty(config.WebhookConfig.PayloadUrl) ? config.Url : config.WebhookConfig.PayloadUrl;
             var payloadTitle = string.IsNullOrEmpty(config.WebhookConfig.PayloadTitle) ? "Stock available" : config.WebhookConfig.PayloadTitle;
             var payloadBody = string.IsNullOrEmpty(config.WebhookConfig.PayloadBody) ? config.Name : config.WebhookConfig.PayloadBody;
-
             this.webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody);
-
             this.browser = browser;
 
             LogConfig(config);
         }
 
+        public void StartService()
+        {
+            cts?.Dispose();
+            cts = new CancellationTokenSource();
+            task = RunTask(cts.Token);
+        }
 
-        public void StartService() => task = RunTask(cts.Token);
-        public void StopService() => cts.Cancel();
+        public void StopService()
+        {
+            cts.Cancel();
+            task.Wait();
+            task.Dispose();
+            cts.Dispose();
+            task = Task.CompletedTask;
+        }
 
         private Task RunTask(CancellationToken token)
         {
@@ -111,7 +119,6 @@ namespace ShopStockNotifier
                 }
             }, token);
         }
-
 
         private async Task<bool> IsAvailable()
         {
@@ -218,7 +225,6 @@ namespace ShopStockNotifier
             return result;
         }
 
-
         private void LogProps(PropertyInfo prop, Object obj, int offset = 0)
         {
             bool doLog = true;
@@ -268,7 +274,6 @@ namespace ShopStockNotifier
                 logger.LogConfig(prop.Name, val, offset: offset);
 
         }
-
 
         public void LogConfig(SiteConfig config)
         {
