@@ -27,7 +27,7 @@ namespace ShopStockNotifier
         private static readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
 
         private readonly Logger logger;
-        private IBrowserContext browser { get; set; }
+        private IBrowser browser { get; set; }
         private string url { get; set; }
         private List<string> divList { get; set; }
         private List<List<string>> idList { get; set; }
@@ -41,7 +41,7 @@ namespace ShopStockNotifier
         private CancellationTokenSource cts { get; set; }
         private RestSender webhook { get; set; }
 
-        public StockChecker(SiteConfig config, IBrowserContext browser, CheckType type = CheckType.Unavailable)
+        public StockChecker(SiteConfig config, IBrowser browser, CheckType type = CheckType.Unavailable)
         {
             // Create logger with a 'unique' hash for this instance
             logger = new Logger(RuntimeHelpers.GetHashCode(this));
@@ -203,7 +203,8 @@ namespace ShopStockNotifier
 
         private async Task<string> GetHTMLAsync(string productUrl)
         {
-            var page = await browser.NewPageAsync();
+            await using var context = await browser.NewContextAsync();
+            var page = await context.NewPageAsync();
             await page.GotoAsync(productUrl);
 
             // Generate selector
@@ -222,6 +223,7 @@ namespace ShopStockNotifier
             string result = await page.ContentAsync();
 
             await page.CloseAsync();
+            //context closes
             return result;
         }
 

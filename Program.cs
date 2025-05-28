@@ -9,6 +9,7 @@ namespace ShopStockNotifier
     {
         private static List<StockChecker> stocks = null!;
         private static readonly Logger logger = new Logger();
+        private static System.Timers.Timer? memoryLogTimer;
 
         static async Task Main(string[] args)
         {
@@ -45,20 +46,28 @@ namespace ShopStockNotifier
             await using var browser = browserEnum == Browsers.Chrome
                 ? await playwright.Chromium.LaunchAsync(new() { Headless = true })
                 : await playwright.Firefox.LaunchAsync(new() { Headless = true });
-            var browserContext = await browser.NewContextAsync();
-
 
             logger.Log("Browser Loaded");
 
             // Create all instances
             logger.Log("Loading Stock checking instances");
-            stocks = config.SiteConfig.Select(site => new StockChecker(site, browserContext)).ToList();
+            stocks = config.SiteConfig.Select(site => new StockChecker(site, browser)).ToList();
             logger.Log("Stock checking instances Loaded");
 
             // Run them all
-            logger.LogHeader("Starting services...");
+            logger.Log("Starting services...");
             stocks.ForEach(stock => stock.StartService());
+            logger.Log("Services started");
 
+            // Start a timer to print memory usage
+            memoryLogTimer = new System.Timers.Timer
+            {
+                Interval = 30 * 1000,
+                AutoReset = true,
+                Enabled = true
+            };
+            memoryLogTimer.Elapsed += (_, __) => PrintMemoryUsage();
+            logger.Log("Started memory tracker");
 
             await Task.Delay(Timeout.Infinite);
         }
@@ -69,12 +78,25 @@ namespace ShopStockNotifier
             Firefox
         }
 
+        private static void PrintMemoryUsage()
+        {
+            var process = System.Diagnostics.Process.GetCurrentProcess();
+            long memoryBytes = process.WorkingSet64;
+            double memoryMB = memoryBytes / (1024.0 * 1024.0);
+            logger.Log($"[Memory] Working Set: {memoryMB:F2} MB");
+            logger.Log($"[GC] TotalMemory: {GC.GetTotalMemory(false) / (1024.0 * 1024.0):F2} MB");
+        }
+
         private static void Shutdown()
         {
             logger.Log("Shutting down, please wait...");
 
             // Stop services
             stocks?.ForEach(stock => stock.StopService());
+
+            // Stop out memory log timer
+            memoryLogTimer?.Stop();
+            memoryLogTimer?.Dispose();
 
             // Remove handler
             logger.Log("Shutdown complete.");
