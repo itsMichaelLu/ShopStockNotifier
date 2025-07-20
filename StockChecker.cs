@@ -63,7 +63,7 @@ namespace ShopStockNotifier
             var payloadUrl = string.IsNullOrEmpty(config.WebhookConfig.PayloadUrl) ? config.Url : config.WebhookConfig.PayloadUrl;
             var payloadTitle = string.IsNullOrEmpty(config.WebhookConfig.PayloadTitle) ? "Stock available" : config.WebhookConfig.PayloadTitle;
             var payloadBody = string.IsNullOrEmpty(config.WebhookConfig.PayloadBody) ? config.Name : config.WebhookConfig.PayloadBody;
-            this.webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody);
+            this.webhook = new RestSender(config.WebhookConfig, payloadUrl, payloadTitle, payloadBody, logger);
             this.browser = browser;
 
             LogConfig(config);
