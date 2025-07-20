@@ -37,17 +37,17 @@ namespace ShopStockNotifier
             logger.Log("Configuration Loaded");
 
             // Create browser
-            logger.Log("Loading Browser");
-            var browserEnum = (args.Length > 0 && string.Equals(args[0], "Chrome", StringComparison.OrdinalIgnoreCase))
+            var browserType = (args.Length > 0 && string.Equals(args[0], "Chrome", StringComparison.OrdinalIgnoreCase))
                 ? Browsers.Chrome
                 : Browsers.Firefox;
+            logger.Log($"Loading Browser: {browserType.ToString()}");
 
             using var playwright = await Playwright.CreateAsync();
-            await using var browser = browserEnum == Browsers.Chrome
+            await using var browser = browserType == Browsers.Chrome
                 ? await playwright.Chromium.LaunchAsync(new() { Headless = true })
                 : await playwright.Firefox.LaunchAsync(new() { Headless = true });
 
-            logger.Log("Browser Loaded");
+            logger.Log($"Browser Loaded");
 
             // Create all instances
             logger.Log("Loading Stock checking instances");
